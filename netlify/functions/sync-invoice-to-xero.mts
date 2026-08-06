@@ -1,6 +1,7 @@
-const crypto = require("crypto");
-const { getRecord, updateRecord } = require("./lib/airtable");
-const { getAccessToken, getInvoice, upsertInvoice } = require("./lib/xero");
+import type { Context, Config } from "@netlify/functions";
+import crypto from "node:crypto";
+import { getRecord, updateRecord } from "./lib/airtable";
+import { getAccessToken, getInvoice, upsertInvoice } from "./lib/xero";
 
 const TABLES = {
   ORGANISATIONS: "Organisations",
@@ -8,15 +9,15 @@ const TABLES = {
   LINE_ITEMS: "Line Items",
 };
 
-async function markError(recordId, message) {
+async function markError(recordId: string, message: string): Promise<void> {
   await updateRecord(TABLES.INVOICES, recordId, {
     "Xero Sync Status": "Error",
     "Xero Sync Error": message,
   });
 }
 
-function isAuthorized(providedSecret) {
-  const expected = process.env.WAREHOUSE_WEBHOOK_SECRET;
+function isAuthorized(providedSecret: string | null): boolean {
+  const expected = Netlify.env.get("WAREHOUSE_WEBHOOK_SECRET");
   if (!providedSecret || !expected) return false;
 
   const providedBuffer = Buffer.from(providedSecret);
@@ -26,27 +27,27 @@ function isAuthorized(providedSecret) {
   return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
-exports.handler = async (event) => {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+export default async (req: Request, context: Context): Promise<Response> => {
+  if (req.method !== "POST") {
+    return new Response("Method Not Allowed", { status: 405 });
   }
 
-  if (!isAuthorized(event.headers["x-webhook-secret"])) {
-    return { statusCode: 401, body: "Unauthorized" };
+  if (!isAuthorized(req.headers.get("x-webhook-secret"))) {
+    return new Response("Unauthorized", { status: 401 });
   }
 
-  let recordId;
+  let recordId: string | undefined;
   try {
-    ({ recordId } = JSON.parse(event.body || "{}"));
+    ({ recordId } = await req.json());
   } catch {
-    return { statusCode: 400, body: "Invalid JSON body" };
+    return new Response("Invalid JSON body", { status: 400 });
   }
   if (!recordId) {
-    return { statusCode: 400, body: "Missing recordId" };
+    return new Response("Missing recordId", { status: 400 });
   }
 
   try {
-    const accountCode = process.env.XERO_LINE_ITEM_ACCOUNT_CODE;
+    const accountCode = Netlify.env.get("XERO_LINE_ITEM_ACCOUNT_CODE");
     if (!accountCode) {
       throw new Error("XERO_LINE_ITEM_ACCOUNT_CODE environment variable is not set.");
     }
@@ -64,7 +65,7 @@ exports.handler = async (event) => {
       throw new Error("Organisation is missing Xero Contact ID. Add it in Airtable before syncing.");
     }
 
-    const lineItemIds = fields["Line Items"] || [];
+    const lineItemIds: string[] = fields["Line Items"] || [];
     if (lineItemIds.length === 0) {
       throw new Error("Invoice has no Line Items.");
     }
@@ -122,7 +123,7 @@ exports.handler = async (event) => {
     // matched back to the source Airtable records by index.
     if (Array.isArray(xeroInvoice.LineItems)) {
       await Promise.all(
-        xeroInvoice.LineItems.map((xeroLine, index) => {
+        xeroInvoice.LineItems.map((xeroLine: any, index: number) => {
           const record = lineItemRecords[index];
           if (!record || !xeroLine.LineItemID) return Promise.resolve();
           return updateRecord(TABLES.LINE_ITEMS, record.id, {
@@ -132,21 +133,30 @@ exports.handler = async (event) => {
       );
     }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ ok: true, xeroInvoiceId: xeroInvoice.InvoiceID, status: xeroInvoice.Status }),
-    };
+    return new Response(
+      JSON.stringify({ ok: true, xeroInvoiceId: xeroInvoice.InvoiceID, status: xeroInvoice.Status }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
   } catch (err) {
-    console.error("sync-invoice-to-xero error:", err);
+    const error = err as Error;
+    console.error("sync-invoice-to-xero error:", error);
     try {
-      await markError(recordId, err.message);
-      return { statusCode: 200, body: JSON.stringify({ ok: false, error: err.message }) };
+      await markError(recordId, error.message);
+      return new Response(JSON.stringify({ ok: false, error: error.message }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     } catch (writeErr) {
-      console.error("Failed to write error state to Airtable:", writeErr);
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ ok: false, error: err.message, writeError: writeErr.message }),
-      };
+      const writeError = writeErr as Error;
+      console.error("Failed to write error state to Airtable:", writeError);
+      return new Response(
+        JSON.stringify({ ok: false, error: error.message, writeError: writeError.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
   }
+};
+
+export const config: Config = {
+  path: "/sync-invoice-to-xero",
 };

@@ -1,14 +1,20 @@
-const AIRTABLE_API_BASE = "https://api.airtable.com/v0";
-
-function tableUrl(table, suffix = "") {
-  return `${AIRTABLE_API_BASE}/${process.env.AIRTABLE_BASE_ID}/${encodeURIComponent(table)}${suffix}`;
+export interface AirtableRecord {
+  id: string;
+  fields: Record<string, any>;
 }
 
-async function airtableRequest(method, url, body) {
+const AIRTABLE_API_BASE = "https://api.airtable.com/v0";
+
+function tableUrl(table: string, suffix = ""): string {
+  const baseId = Netlify.env.get("AIRTABLE_BASE_ID");
+  return `${AIRTABLE_API_BASE}/${baseId}/${encodeURIComponent(table)}${suffix}`;
+}
+
+async function airtableRequest(method: string, url: string, body?: unknown): Promise<any> {
   const response = await fetch(url, {
     method,
     headers: {
-      Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
+      Authorization: `Bearer ${Netlify.env.get("AIRTABLE_PAT")}`,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -24,20 +30,26 @@ async function airtableRequest(method, url, body) {
   return data;
 }
 
-function getRecord(table, recordId) {
+export function getRecord(table: string, recordId: string): Promise<AirtableRecord> {
   return airtableRequest("GET", tableUrl(table, `/${recordId}`));
 }
 
-function updateRecord(table, recordId, fields) {
+export function updateRecord(
+  table: string,
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<AirtableRecord> {
   return airtableRequest("PATCH", tableUrl(table, `/${recordId}`), { fields });
 }
 
-async function findRecordByField(table, fieldName, value) {
+export async function findRecordByField(
+  table: string,
+  fieldName: string,
+  value: string
+): Promise<AirtableRecord | null> {
   const escapedValue = value.replace(/"/g, '\\"');
   const formula = `{${fieldName}} = "${escapedValue}"`;
   const url = `${tableUrl(table)}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
   const data = await airtableRequest("GET", url);
   return data.records?.[0] || null;
 }
-
-module.exports = { getRecord, updateRecord, findRecordByField };
