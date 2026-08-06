@@ -96,13 +96,15 @@ export default async (req: Request, context: Context): Promise<Response> => {
       }
     }
 
+    // InvoiceNumber is deliberately omitted: Xero assigns it (requires automatic
+    // invoice numbering to be enabled in Xero's Invoice settings), and the assigned
+    // number is written back onto the Airtable record below.
     const invoicePayload = {
       Type: "ACCREC",
       Contact: { ContactID: contactId },
       LineItems: xeroLineItems,
       LineAmountType: "Exclusive",
       Status: "AUTHORISED",
-      InvoiceNumber: fields["Invoice Number"],
       Reference: fields["Reference"] || undefined,
       Date: fields["Issue Date"] || undefined,
       DueDate: fields["Due Date"] || undefined,
@@ -112,6 +114,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
     const xeroInvoice = await upsertInvoice(invoicePayload, token);
 
     await updateRecord(TABLES.INVOICES, recordId, {
+      "Invoice Number": xeroInvoice.InvoiceNumber,
       "Xero Invoice ID": xeroInvoice.InvoiceID,
       "Xero Invoice Status": xeroInvoice.Status,
       "Xero Sync Status": "Synced",
