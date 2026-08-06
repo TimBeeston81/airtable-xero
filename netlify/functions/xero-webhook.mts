@@ -1,7 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import crypto from "node:crypto";
 import { findRecordByField, updateRecord } from "./lib/airtable";
-import { getAccessToken, getInvoice } from "./lib/xero";
+import { getAccessToken, getInvoice, parseXeroDate } from "./lib/xero";
 
 const TABLES = { INVOICES: "Invoices" };
 
@@ -47,7 +47,7 @@ async function processEvent(evt: XeroWebhookEvent, token: string): Promise<void>
   if (!record) return;
 
   const lastSynced = record.fields["Last Synced Xero Date"];
-  const updatedDateUtc = xeroInvoice.UpdatedDateUTC;
+  const updatedDateUtc = parseXeroDate(xeroInvoice.UpdatedDateUTC);
   if (lastSynced && updatedDateUtc && new Date(updatedDateUtc).getTime() <= new Date(lastSynced).getTime()) {
     return; // No-op update, nothing has actually changed since the last write.
   }

@@ -47,6 +47,21 @@ async function xeroRequest(method: string, path: string, token: string, body?: u
   return data;
 }
 
+// Xero's Accounting API returns datetimes in the old .NET JSON date format
+// (e.g. "/Date(1786025738277+0000)/"), not ISO8601, despite the Accept: application/json
+// header. Airtable's dateTime field rejects that format outright, so it must be converted.
+export function parseXeroDate(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+
+  const netDateMatch = value.match(/^\/Date\((\d+)([+-]\d{4})?\)\/$/);
+  if (netDateMatch) {
+    return new Date(Number(netDateMatch[1])).toISOString();
+  }
+
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+}
+
 export async function getInvoice(invoiceId: string, token: string): Promise<any> {
   const data = await xeroRequest("GET", `/Invoices/${invoiceId}`, token);
   return data.Invoices?.[0];

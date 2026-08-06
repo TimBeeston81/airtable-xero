@@ -1,7 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import crypto from "node:crypto";
 import { getRecord, updateRecord } from "./lib/airtable";
-import { getAccessToken, getInvoice, upsertInvoice } from "./lib/xero";
+import { getAccessToken, getInvoice, upsertInvoice, parseXeroDate } from "./lib/xero";
 
 const TABLES = {
   ORGANISATIONS: "Organisations",
@@ -119,7 +119,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       "Xero Invoice Status": xeroInvoice.Status,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
-      "Last Synced Xero Date": xeroInvoice.UpdatedDateUTC || new Date().toISOString(),
+      "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),
     });
 
     // Xero returns LineItems in the same order they were submitted, so they can be
