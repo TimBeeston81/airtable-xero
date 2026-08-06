@@ -1,0 +1,9 @@
+{
+  "name": "airtable-xero-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Direct Airtable to Xero sync, running as Netlify Functions.",
+  "engines": {
+    "node": ">=18"
+  }
+}
