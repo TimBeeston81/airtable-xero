@@ -1,9 +1,10 @@
 import type { Context, Config } from "@netlify/functions";
 import crypto from "node:crypto";
-import { findRecordByField, updateRecord } from "./lib/airtable";
+import { findRecordByField, updateRecord, buildLogEntry } from "./lib/airtable";
 import { getAccessToken, getInvoice, parseXeroDate } from "./lib/xero";
 
 const TABLES = { INVOICES: "Invoices" };
+const SOURCE = "xero-webhook";
 
 interface XeroWebhookEvent {
   resourceUrl: string;
@@ -52,11 +53,26 @@ async function processEvent(evt: XeroWebhookEvent, token: string): Promise<void>
     return; // No-op update, nothing has actually changed since the last write.
   }
 
-  await updateRecord(TABLES.INVOICES, record.id, {
-    "Xero Invoice Status": xeroInvoice.Status,
-    "Paid": xeroInvoice.AmountPaid ?? 0,
-    "Last Synced Xero Date": updatedDateUtc || new Date().toISOString(),
-  });
+  try {
+    const successDetails = `Invoice status synced from Xero: ${xeroInvoice.Status}`;
+
+    await updateRecord(TABLES.INVOICES, record.id, {
+      "Xero Invoice Status": xeroInvoice.Status,
+      "Paid": xeroInvoice.AmountPaid ?? 0,
+      "Last Synced Xero Date": updatedDateUtc || new Date().toISOString(),
+      "Automation Log": buildLogEntry("Success", successDetails, SOURCE, record.fields["Automation Log"]),
+    });
+  } catch (err) {
+    const error = err as Error;
+    try {
+      await updateRecord(TABLES.INVOICES, record.id, {
+        "Automation Log": buildLogEntry("Error", error.message, SOURCE, record.fields["Automation Log"]),
+      });
+    } catch (writeErr) {
+      console.error("Failed to write error log to Airtable:", writeErr);
+    }
+    throw err;
+  }
 }
 
 export default async (req: Request, context: Context): Promise<Response> => {

@@ -1,14 +1,25 @@
 import type { Context, Config } from "@netlify/functions";
-import { getRecord, updateRecord } from "./lib/airtable";
+import { getRecord, updateRecord, buildLogEntry } from "./lib/airtable";
 import { getAccessToken, upsertInvoice, parseXeroDate } from "./lib/xero";
 import { isAuthorized } from "./lib/auth";
 
 const TABLES = { INVOICES: "Invoices" };
 
+const SOURCE = "void-invoice-in-xero";
+
 async function markError(recordId: string, message: string): Promise<void> {
+  let existingLog: string | undefined;
+  try {
+    const record = await getRecord(TABLES.INVOICES, recordId);
+    existingLog = record.fields["Automation Log"];
+  } catch {
+    // Couldn't fetch the record at all - proceed without log history rather than fail.
+  }
+
   await updateRecord(TABLES.INVOICES, recordId, {
     "Xero Sync Status": "Error",
     "Xero Sync Error": message,
+    "Automation Log": buildLogEntry("Error", message, SOURCE, existingLog),
   });
 }
 
@@ -44,11 +55,14 @@ export default async (req: Request, context: Context): Promise<Response> => {
     // allocated to the invoice - that error surfaces to Xero Sync Error as-is below.
     const xeroInvoice = await upsertInvoice({ InvoiceID: xeroInvoiceId, Status: "VOIDED" }, token);
 
+    const successDetails = `Invoice voided in Xero (${xeroInvoice.InvoiceNumber || xeroInvoice.InvoiceID})`;
+
     await updateRecord(TABLES.INVOICES, recordId, {
       "Xero Invoice Status": xeroInvoice.Status,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),
+      "Automation Log": buildLogEntry("Success", successDetails, SOURCE, invoice.fields["Automation Log"]),
     });
 
     return new Response(

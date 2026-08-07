@@ -1,5 +1,5 @@
 import type { Context, Config } from "@netlify/functions";
-import { getRecord, updateRecord } from "./lib/airtable";
+import { getRecord, updateRecord, buildLogEntry } from "./lib/airtable";
 import { getAccessToken, getInvoice, upsertInvoice, getOnlineInvoiceUrl, parseXeroDate } from "./lib/xero";
 import { isAuthorized } from "./lib/auth";
 
@@ -9,10 +9,21 @@ const TABLES = {
   LINE_ITEMS: "Line Items",
 };
 
+const SOURCE = "sync-invoice-to-xero";
+
 async function markError(recordId: string, message: string): Promise<void> {
+  let existingLog: string | undefined;
+  try {
+    const record = await getRecord(TABLES.INVOICES, recordId);
+    existingLog = record.fields["Automation Log"];
+  } catch {
+    // Couldn't fetch the record at all - proceed without log history rather than fail.
+  }
+
   await updateRecord(TABLES.INVOICES, recordId, {
     "Xero Sync Status": "Error",
     "Xero Sync Error": message,
+    "Automation Log": buildLogEntry("Error", message, SOURCE, existingLog),
   });
 }
 
@@ -111,6 +122,8 @@ export default async (req: Request, context: Context): Promise<Response> => {
       console.error("Failed to fetch online invoice URL:", err);
     }
 
+    const successDetails = `Invoice synced to Xero (${xeroInvoice.InvoiceNumber || xeroInvoice.InvoiceID})`;
+
     await updateRecord(TABLES.INVOICES, recordId, {
       "Invoice Number": xeroInvoice.InvoiceNumber,
       "Xero Invoice ID": xeroInvoice.InvoiceID,
@@ -121,6 +134,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),
       "Approved": true,
+      "Automation Log": buildLogEntry("Success", successDetails, SOURCE, fields["Automation Log"]),
     });
 
     // Xero returns LineItems in the same order they were submitted, so they can be

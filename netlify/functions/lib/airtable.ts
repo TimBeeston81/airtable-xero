@@ -53,3 +53,17 @@ export async function findRecordByField(
   const data = await airtableRequest("GET", url);
   return data.records?.[0] || null;
 }
+
+// New entries go on top, older entries follow below a --- separator. Pass the
+// Automation Log field's current value if already known (e.g. from an earlier
+// getRecord/findRecordByField call in the same function) to avoid an extra fetch.
+export function buildLogEntry(
+  outcome: "Success" | "Error",
+  details: string,
+  source: string,
+  existingLog: string | undefined | null
+): string {
+  const icon = outcome === "Success" ? "✅" : "❌";
+  const entry = `${icon} ${outcome}: ${details} by ${source} at ${new Date().toISOString()}`;
+  return existingLog ? `${entry}\n\n---\n\n${existingLog}` : entry;
+}
