@@ -1,7 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
-import crypto from "node:crypto";
 import { getRecord, updateRecord } from "./lib/airtable";
 import { getAccessToken, getInvoice, upsertInvoice, getOnlineInvoiceUrl, parseXeroDate } from "./lib/xero";
+import { isAuthorized } from "./lib/auth";
 
 const TABLES = {
   ORGANISATIONS: "Organisations",
@@ -14,17 +14,6 @@ async function markError(recordId: string, message: string): Promise<void> {
     "Xero Sync Status": "Error",
     "Xero Sync Error": message,
   });
-}
-
-function isAuthorized(providedSecret: string | null): boolean {
-  const expected = Netlify.env.get("WAREHOUSE_WEBHOOK_SECRET");
-  if (!providedSecret || !expected) return false;
-
-  const providedBuffer = Buffer.from(providedSecret);
-  const expectedBuffer = Buffer.from(expected);
-  if (providedBuffer.length !== expectedBuffer.length) return false;
-
-  return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
 export default async (req: Request, context: Context): Promise<Response> => {
@@ -131,6 +120,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),
+      "Approved": true,
     });
 
     // Xero returns LineItems in the same order they were submitted, so they can be
