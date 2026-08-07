@@ -1,7 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import crypto from "node:crypto";
 import { getRecord, updateRecord } from "./lib/airtable";
-import { getAccessToken, getInvoice, upsertInvoice, parseXeroDate } from "./lib/xero";
+import { getAccessToken, getInvoice, upsertInvoice, getOnlineInvoiceUrl, parseXeroDate } from "./lib/xero";
 
 const TABLES = {
   ORGANISATIONS: "Organisations",
@@ -113,11 +113,21 @@ export default async (req: Request, context: Context): Promise<Response> => {
 
     const xeroInvoice = await upsertInvoice(invoicePayload, token);
 
+    // The online invoice link is supplementary: if this call fails, the sync itself
+    // still succeeded, so don't let it fail the whole write-back.
+    let onlineInvoiceUrl: string | undefined;
+    try {
+      onlineInvoiceUrl = await getOnlineInvoiceUrl(xeroInvoice.InvoiceID, token);
+    } catch (err) {
+      console.error("Failed to fetch online invoice URL:", err);
+    }
+
     await updateRecord(TABLES.INVOICES, recordId, {
       "Invoice Number": xeroInvoice.InvoiceNumber,
       "Xero Invoice ID": xeroInvoice.InvoiceID,
       "Xero Invoice Status": xeroInvoice.Status,
       "Paid": xeroInvoice.AmountPaid ?? 0,
+      "Invoice URL": onlineInvoiceUrl,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),

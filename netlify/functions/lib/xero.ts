@@ -72,3 +72,9 @@ export async function upsertInvoice(invoicePayload: Record<string, unknown>, tok
   const data = await xeroRequest("POST", "/Invoices", token, { Invoices: [invoicePayload] });
   return data.Invoices?.[0];
 }
+
+// The customer-facing "pay online" link. Separate endpoint, not part of the Invoice object itself.
+export async function getOnlineInvoiceUrl(invoiceId: string, token: string): Promise<string | undefined> {
+  const data = await xeroRequest("GET", `/Invoices/${invoiceId}/OnlineInvoice`, token);
+  return data.OnlineInvoices?.[0]?.OnlineInvoiceUrl;
+}
