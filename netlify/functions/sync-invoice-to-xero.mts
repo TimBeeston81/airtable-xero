@@ -117,6 +117,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       "Invoice Number": xeroInvoice.InvoiceNumber,
       "Xero Invoice ID": xeroInvoice.InvoiceID,
       "Xero Invoice Status": xeroInvoice.Status,
+      "Paid": xeroInvoice.AmountPaid ?? 0,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),

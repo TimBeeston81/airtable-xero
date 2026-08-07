@@ -54,6 +54,7 @@ async function processEvent(evt: XeroWebhookEvent, token: string): Promise<void>
 
   await updateRecord(TABLES.INVOICES, record.id, {
     "Xero Invoice Status": xeroInvoice.Status,
+    "Paid": xeroInvoice.AmountPaid ?? 0,
     "Last Synced Xero Date": updatedDateUtc || new Date().toISOString(),
   });
 }
