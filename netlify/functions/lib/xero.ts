@@ -73,6 +73,34 @@ export async function upsertInvoice(invoicePayload: Record<string, unknown>, tok
   return data.Invoices?.[0];
 }
 
+// Records a payment against an invoice, so Xero shows it as PAID rather than
+// leaving the money to be reconciled by hand. Used for deposits the portal has
+// already collected by card.
+//
+// `accountCode` is the account the money lands in (the Stripe account), which
+// is not the revenue account the invoice's line items are coded to.
+//
+// Note there is no idempotency key on the Accounting API — calling this twice
+// records two payments and overpays the invoice, so callers must guard on the
+// stored PaymentID.
+export async function createPayment(
+  payment: { invoiceId: string; accountCode: string; amount: number; date: string; reference?: string },
+  token: string,
+): Promise<any> {
+  const data = await xeroRequest("PUT", "/Payments", token, {
+    Payments: [
+      {
+        Invoice: { InvoiceID: payment.invoiceId },
+        Account: { Code: payment.accountCode },
+        Date: payment.date,
+        Amount: payment.amount,
+        ...(payment.reference ? { Reference: payment.reference } : {}),
+      },
+    ],
+  });
+  return data.Payments?.[0];
+}
+
 // The customer-facing "pay online" link. Separate endpoint, not part of the Invoice object itself.
 export async function getOnlineInvoiceUrl(invoiceId: string, token: string): Promise<string | undefined> {
   const data = await xeroRequest("GET", `/Invoices/${invoiceId}/OnlineInvoice`, token);
