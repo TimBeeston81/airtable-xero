@@ -68,6 +68,51 @@ async function recordStripePayment(
   return { paymentId: created?.PaymentID, invoice };
 }
 
+// Attempts the payment and reports the outcome, but deliberately never
+// throws. A payment failure here must never cost the caller the fact that
+// the *invoice* itself already exists in Xero and has been written back —
+// losing that would leave Xero Invoice ID blank in Airtable, and the next
+// sync attempt would create a second, duplicate invoice rather than finding
+// the one that's already there. Xero Sync Status is left as "Synced" on a
+// payment failure for the same reason: the invoice sync genuinely succeeded,
+// only the payment needs retrying, and the AUTHORISED-with-outstanding-
+// payment branch above is what handles that retry.
+async function tryRecordStripePayment(
+  recordId: string,
+  xeroInvoiceId: string,
+  payment: { amount: number; reference?: string },
+  token: string,
+  precedingLog: string,
+): Promise<void> {
+  try {
+    const { paymentId, invoice } = await recordStripePayment(xeroInvoiceId, payment, token);
+    await updateRecord(TABLES.INVOICES, recordId, {
+      "Xero Payment ID": paymentId,
+      "Xero Invoice Status": invoice.Status,
+      "Paid": invoice.AmountPaid ?? 0,
+      "Last Synced Xero Date": parseXeroDate(invoice.UpdatedDateUTC) || new Date().toISOString(),
+      "Automation Log": buildLogEntry(
+        "Success",
+        `Card payment of ${payment.amount} recorded against ${invoice.InvoiceNumber || xeroInvoiceId}`,
+        SOURCE,
+        precedingLog,
+      ),
+    });
+  } catch (err) {
+    const error = err as Error;
+    console.error("Failed to record Stripe payment in Xero:", error);
+    await updateRecord(TABLES.INVOICES, recordId, {
+      "Xero Sync Error": `Invoice synced but card payment not recorded: ${error.message}`,
+      "Automation Log": buildLogEntry(
+        "Error",
+        `Card payment of ${payment.amount} could not be recorded — ${error.message}`,
+        SOURCE,
+        precedingLog,
+      ),
+    });
+  }
+}
+
 export default async (req: Request, context: Context): Promise<Response> => {
   if (req.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
@@ -142,25 +187,19 @@ export default async (req: Request, context: Context): Promise<Response> => {
           );
         }
 
-        const { paymentId, invoice: paidInvoice } = await recordStripePayment(
-          existingInvoiceId,
-          outstanding,
-          token,
-        );
-        const details = `Card payment of ${outstanding.amount} recorded against ${paidInvoice.InvoiceNumber || existingInvoiceId}`;
-
+        // The invoice itself is untouched here — it already existed and is
+        // already correctly reflected in Airtable — so mark the sync clean
+        // before attempting the payment, on the same reasoning as the
+        // first-sync path below: a payment failure must not read as the sync
+        // having failed.
         await updateRecord(TABLES.INVOICES, recordId, {
-          "Xero Payment ID": paymentId,
-          "Xero Invoice Status": paidInvoice.Status,
-          "Paid": paidInvoice.AmountPaid ?? 0,
           "Xero Sync Status": "Synced",
           "Xero Sync Error": "",
-          "Last Synced Xero Date": parseXeroDate(paidInvoice.UpdatedDateUTC) || new Date().toISOString(),
-          "Automation Log": buildLogEntry("Success", details, SOURCE, fields["Automation Log"]),
         });
+        await tryRecordStripePayment(recordId, existingInvoiceId, outstanding, token, fields["Automation Log"]);
 
         return new Response(
-          JSON.stringify({ ok: true, xeroInvoiceId: existingInvoiceId, status: paidInvoice.Status, paymentId }),
+          JSON.stringify({ ok: true, xeroInvoiceId: existingInvoiceId }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
@@ -181,18 +220,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       ...(existingInvoiceId ? { InvoiceID: existingInvoiceId } : {}),
     };
 
-    let xeroInvoice = await upsertInvoice(invoicePayload, token);
-
-    // If the portal already took the deposit by card, record it now that the
-    // invoice exists in Xero — the payment can't be posted before there's an
-    // InvoiceID to attach it to.
-    let stripePaymentId: string | undefined;
-    const outstandingPayment = stripePaymentToRecord(fields);
-    if (outstandingPayment) {
-      const paid = await recordStripePayment(xeroInvoice.InvoiceID, outstandingPayment, token);
-      stripePaymentId = paid.paymentId;
-      xeroInvoice = paid.invoice ?? xeroInvoice;
-    }
+    const xeroInvoice = await upsertInvoice(invoicePayload, token);
 
     // The online invoice link is supplementary: if this call fails, the sync itself
     // still succeeded, so don't let it fail the whole write-back.
@@ -203,22 +231,30 @@ export default async (req: Request, context: Context): Promise<Response> => {
       console.error("Failed to fetch online invoice URL:", err);
     }
 
-    const successDetails = stripePaymentId
-      ? `Invoice synced to Xero (${xeroInvoice.InvoiceNumber || xeroInvoice.InvoiceID}) and card payment of ${outstandingPayment?.amount} recorded`
-      : `Invoice synced to Xero (${xeroInvoice.InvoiceNumber || xeroInvoice.InvoiceID})`;
+    const syncedLog = buildLogEntry(
+      "Success",
+      `Invoice synced to Xero (${xeroInvoice.InvoiceNumber || xeroInvoice.InvoiceID})`,
+      SOURCE,
+      fields["Automation Log"],
+    );
 
+    // Written back before the payment is attempted, deliberately — see
+    // tryRecordStripePayment for why a payment failure must never cost us
+    // this. If the process died here (rather than throwing), the next sync
+    // would see Xero Invoice ID already set and correctly fall into the
+    // AUTHORISED-with-outstanding-payment branch above instead of creating a
+    // second invoice.
     await updateRecord(TABLES.INVOICES, recordId, {
       "Invoice Number": xeroInvoice.InvoiceNumber,
       "Xero Invoice ID": xeroInvoice.InvoiceID,
       "Xero Invoice Status": xeroInvoice.Status,
       "Paid": xeroInvoice.AmountPaid ?? 0,
-      ...(stripePaymentId ? { "Xero Payment ID": stripePaymentId } : {}),
       "Invoice URL": onlineInvoiceUrl,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
       "Last Synced Xero Date": parseXeroDate(xeroInvoice.UpdatedDateUTC) || new Date().toISOString(),
       "Approved": true,
-      "Automation Log": buildLogEntry("Success", successDetails, SOURCE, fields["Automation Log"]),
+      "Automation Log": syncedLog,
     });
 
     // Xero returns LineItems in the same order they were submitted, so they can be
@@ -233,6 +269,15 @@ export default async (req: Request, context: Context): Promise<Response> => {
           });
         })
       );
+    }
+
+    // If the portal already took the deposit by card, record it now that the
+    // invoice exists in Xero — the payment can't be posted before there's an
+    // InvoiceID to attach it to. Failure here is reported but doesn't affect
+    // the response below: the invoice sync itself succeeded regardless.
+    const outstandingPayment = stripePaymentToRecord(fields);
+    if (outstandingPayment) {
+      await tryRecordStripePayment(recordId, xeroInvoice.InvoiceID, outstandingPayment, token, syncedLog);
     }
 
     return new Response(
