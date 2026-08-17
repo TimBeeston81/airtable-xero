@@ -36,12 +36,23 @@ async function xeroRequest(method: string, path: string, token: string, body?: u
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  const data = await response.json().catch(() => ({}));
+  const rawBody = await response.text();
+  const data = (() => {
+    try {
+      return JSON.parse(rawBody);
+    } catch {
+      return {};
+    }
+  })();
 
   if (!response.ok) {
     const validationMessages = data?.Elements?.[0]?.ValidationErrors?.map((e: any) => e.Message).join("; ");
-    const message = validationMessages || data?.Detail || data?.Message || JSON.stringify(data);
-    throw new Error(`Xero API error (${response.status}): ${message}`);
+    const summary = validationMessages || data?.Detail || data?.Message || "(no message field)";
+    // Xero's short "Message"/"Detail" fields have repeatedly turned out to
+    // discard the detail that actually explains a 401 — append the full
+    // response so a failure is diagnosable from the Automation Log rather
+    // than needing a second round of guessing.
+    throw new Error(`Xero API error (${response.status}): ${summary} — full response: ${rawBody || "(empty body)"}`);
   }
 
   return data;
