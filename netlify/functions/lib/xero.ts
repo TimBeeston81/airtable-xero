@@ -117,3 +117,19 @@ export async function getOnlineInvoiceUrl(invoiceId: string, token: string): Pro
   const data = await xeroRequest("GET", `/Invoices/${invoiceId}/OnlineInvoice`, token);
   return data.OnlineInvoices?.[0]?.OnlineInvoiceUrl;
 }
+
+// Exact-match search, used to avoid creating a duplicate contact when one
+// already exists under this name. Xero's `where` filter takes the whole
+// expression URL-encoded, with a doubled double-quote to escape a literal
+// quote inside the value.
+export async function findContactByName(name: string, token: string): Promise<any> {
+  const escapedName = name.replace(/"/g, '""');
+  const where = encodeURIComponent(`Name=="${escapedName}"`);
+  const data = await xeroRequest("GET", `/Contacts?where=${where}`, token);
+  return data.Contacts?.[0];
+}
+
+export async function createContact(contactPayload: Record<string, unknown>, token: string): Promise<any> {
+  const data = await xeroRequest("POST", "/Contacts", token, { Contacts: [contactPayload] });
+  return data.Contacts?.[0];
+}

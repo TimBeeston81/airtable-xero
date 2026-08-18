@@ -1,6 +1,15 @@
 import type { Context, Config } from "@netlify/functions";
 import { getRecord, updateRecord, buildLogEntry } from "./lib/airtable";
-import { getAccessToken, getInvoice, upsertInvoice, createPayment, getOnlineInvoiceUrl, parseXeroDate } from "./lib/xero";
+import {
+  getAccessToken,
+  getInvoice,
+  upsertInvoice,
+  createPayment,
+  getOnlineInvoiceUrl,
+  findContactByName,
+  createContact,
+  parseXeroDate,
+} from "./lib/xero";
 import { isAuthorized } from "./lib/auth";
 
 const TABLES = {
@@ -25,6 +34,69 @@ async function markError(recordId: string, message: string): Promise<void> {
     "Xero Sync Error": message,
     "Automation Log": buildLogEntry("Error", message, SOURCE, existingLog),
   });
+}
+
+// Resolves the Organisation's Xero Contact ID, searching Xero by exact name
+// match first and creating a new contact only if none is found. Writes the
+// result back onto the Organisation record immediately, decoupled from the
+// rest of the invoice sync - so if something later in this run fails, a
+// retry finds Xero Contact ID already set rather than searching/creating
+// again and risking a duplicate contact.
+async function resolveContactId(
+  organisation: { id: string; fields: Record<string, any> },
+  organisationId: string,
+  token: string,
+): Promise<string> {
+  const existing = organisation.fields["Xero Contact ID"];
+  if (existing) return existing;
+
+  const name = organisation.fields["Organisation"];
+  if (!name) {
+    throw new Error("Organisation has no name to match or create a Xero contact with.");
+  }
+
+  const matched = await findContactByName(name, token);
+  let contactId: string;
+
+  if (matched) {
+    contactId = matched.ContactID;
+  } else {
+    const email = organisation.fields["Primary Contact Email"]?.[0];
+    const phone = organisation.fields["Phone"];
+    const addressLine1 = organisation.fields["Address line 1"];
+    const addressLine2 = organisation.fields["Address line 2"];
+    const city = organisation.fields["City"];
+    const region = organisation.fields["State/Region"];
+    const postcode = organisation.fields["Postcode"];
+    const country = organisation.fields["Country"];
+    const hasAddress = addressLine1 || city || postcode;
+
+    const created = await createContact(
+      {
+        Name: name,
+        EmailAddress: email || undefined,
+        Phones: phone ? [{ PhoneType: "DEFAULT", PhoneNumber: phone }] : undefined,
+        Addresses: hasAddress
+          ? [
+              {
+                AddressType: "STREET",
+                AddressLine1: addressLine1 || undefined,
+                AddressLine2: addressLine2 || undefined,
+                City: city || undefined,
+                Region: region || undefined,
+                PostalCode: postcode || undefined,
+                Country: country || undefined,
+              },
+            ]
+          : undefined,
+      },
+      token,
+    );
+    contactId = created.ContactID;
+  }
+
+  await updateRecord(TABLES.ORGANISATIONS, organisationId, { "Xero Contact ID": contactId });
+  return contactId;
 }
 
 // A deposit the portal already collected by card. The Stripe fields are set by
@@ -146,10 +218,10 @@ export default async (req: Request, context: Context): Promise<Response> => {
       throw new Error("Invoice has no linked Organisation.");
     }
     const organisation = await getRecord(TABLES.ORGANISATIONS, organisationId);
-    const contactId = organisation.fields["Xero Contact ID"];
-    if (!contactId) {
-      throw new Error("Organisation is missing Xero Contact ID. Add it in Airtable before syncing.");
-    }
+
+    const token = await getAccessToken();
+
+    const contactId = await resolveContactId(organisation, organisationId, token);
 
     const lineItemIds: string[] = fields["Line Items"] || [];
     if (lineItemIds.length === 0) {
@@ -165,8 +237,6 @@ export default async (req: Request, context: Context): Promise<Response> => {
       UnitAmount: record.fields["Unit Amount"] ?? 0,
       AccountCode: accountCode,
     }));
-
-    const token = await getAccessToken();
 
     const existingInvoiceId = fields["Xero Invoice ID"];
 
