@@ -162,6 +162,7 @@ async function tryRecordStripePayment(
       "Xero Payment ID": paymentId,
       "Xero Invoice Status": invoice.Status,
       "Paid": invoice.AmountPaid ?? 0,
+      "Balance": invoice.Total ?? 0,
       "Last Synced Xero Date": parseXeroDate(invoice.UpdatedDateUTC) || new Date().toISOString(),
       "Automation Log": buildLogEntry(
         "Success",
@@ -319,6 +320,7 @@ export default async (req: Request, context: Context): Promise<Response> => {
       "Xero Invoice ID": xeroInvoice.InvoiceID,
       "Xero Invoice Status": xeroInvoice.Status,
       "Paid": xeroInvoice.AmountPaid ?? 0,
+      "Balance": xeroInvoice.Total ?? 0,
       "Invoice URL": onlineInvoiceUrl,
       "Xero Sync Status": "Synced",
       "Xero Sync Error": "",
