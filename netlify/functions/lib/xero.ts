@@ -135,8 +135,15 @@ export async function createContact(contactPayload: Record<string, unknown>, tok
 }
 
 // The Xero organisation this connection belongs to. A custom connection is tied to
-// exactly one, so its name says whether we are talking to the demo company or the real books.
+// exactly one, so its name says whether we are talking to the demo company or the real
+// books. Read from /connections rather than /Organisation because that needs no
+// accounting scope, so the existing connection's permissions don't have to change.
 export async function getOrganisationName(token: string): Promise<string> {
-  const data = await xeroRequest("GET", "/Organisation", token);
-  return String(data.Organisations?.[0]?.Name ?? "");
+  const response = await fetch("https://api.xero.com/connections", { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } });
+  if (!response.ok) throw new Error(`Xero connections request failed (${response.status}): ${await response.text()}`);
+  const connections = (await response.json()) as { tenantName?: string }[];
+  if (!Array.isArray(connections) || connections.length !== 1) {
+    throw new Error(`Expected this Xero connection to belong to exactly one organisation, found ${Array.isArray(connections) ? connections.length : 0}.`);
+  }
+  return String(connections[0].tenantName ?? "");
 }
