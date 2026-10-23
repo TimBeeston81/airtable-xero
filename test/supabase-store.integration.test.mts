@@ -144,3 +144,31 @@ test("if Xero's number is already used here, the invoice is still recorded, so a
   assert.match(inv.xero_sync_error, /already has that number/);
   assert.equal(inv.xero_sync_status, "Synced");
 });
+
+import { createSupabaseTaskStore } from "../netlify/functions/lib/task-store";
+import { syncTaskStatus, notifyNewTask } from "../netlify/functions/lib/task-sync";
+
+test("the real task store: reads origin columns and project, logs events, and staging writes nothing", { skip }, async () => {
+  const project = must(await db.from("projects").insert({ organisation_id: made.org, name: "ZZ client project", is_test: true }).select("id, code").single());
+  const task = must(await db.from("tasks").insert({
+    title: "ZZ ticket", project_id: project.id, status: "Done", is_test: true,
+    origin_base_id: "appZZZZZZZZZZZZZZ", origin_table_id: "tblZZZZZZZZZZZZZZ", origin_record_id: "recZZZZZZZZZZZZZZ", origin_status_field_id: "fldZZZZZZZZZZZZZZ", origin_status_map: { Done: "Resolved" },
+  }).select("id").single());
+  const store = createSupabaseTaskStore(url, key);
+  const got = await store.getTask(task.id);
+  assert.deepEqual([got?.project_code, got?.origin_status_map, got?.status], [project.code, { Done: "Resolved" }, "Done"]);
+  const writes: unknown[] = [];
+  const pushes: any[] = [];
+  const deps = { store, env: (n: string) => (n === "SUPABASE_URL" ? url : undefined), sendPushover: async (o: any) => { pushes.push(o); return "r"; }, updateOrigin: async (...a: unknown[]) => void writes.push(a), escapeHtml: (s: string) => s };
+  const r = await syncTaskStatus(deps, task.id);
+  assert.ok(r.ok && r.skipped);
+  assert.equal(writes.length, 0, "staging data never writes to a client base");
+  await notifyNewTask({ ...deps, sendPushover: async () => { throw new Error("pushover down"); } }, task.id);
+  const { data: ev } = await db.from("events").select("outcome, automation").eq("entity_id", task.id);
+  assert.deepEqual(ev.map((e: any) => [e.outcome, e.automation]), [["failure", "notify-new-task"]]);
+  await db.from("tasks").delete().eq("id", task.id);
+  await db.from("projects").delete().eq("id", project.id);
+  await db.from("events").delete().eq("entity_id", task.id);
+  assert.equal((await notifyNewTask(deps, task.id)).ok, false, "a task that doesn't exist is an error");
+  assert.equal(pushes.length, 0);
+});
