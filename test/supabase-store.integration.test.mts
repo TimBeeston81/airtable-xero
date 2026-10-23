@@ -127,3 +127,20 @@ test("webhook updates and a void are written", { skip }, async () => {
   const again = await syncInvoice(deps(xero), id);
   assert.ok(!again.ok && /voided/.test(again.error));
 });
+
+test("if Xero's number is already used here, the invoice is still recorded, so a retry can't duplicate it", { skip }, async () => {
+  const other = await makeInvoice({ number: `ZZ-DUP-${Date.now()}` });
+  const id = await makeInvoice();
+  const xero = newXero();
+  const number = (await row(other)).number as string;
+  xero.prefix = "";
+  const original = xero.upsertInvoice.bind(xero);
+  xero.upsertInvoice = async (p: any) => ({ ...(await original(p)), InvoiceNumber: number, InvoiceID: `zz-dup-${Date.now()}` });
+  const r = await syncInvoice(deps(xero), id);
+  assert.ok(r.ok);
+  const inv = await row(id);
+  assert.ok(inv.xero_invoice_id, "the Xero id is saved");
+  assert.equal(inv.number, null);
+  assert.match(inv.xero_sync_error, /already has that number/);
+  assert.equal(inv.xero_sync_status, "Synced");
+});

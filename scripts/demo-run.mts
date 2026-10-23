@@ -78,7 +78,10 @@ try {
   check("it has an online link", /^https:\/\//.test(ia.xero_url ?? ""));
   const xa = await xero.getInvoice(ia.xero_invoice_id, token);
   const expected = 2 * 450 + 1.5 * 12.34;
-  check("Xero's total matches ours to the penny", Math.abs(xa.Total - expected) < 0.005, `Xero ${xa.Total}, expected ${expected.toFixed(2)}`);
+  // The demo company charges 20% VAT on this account by default, which a non-VAT-registered
+  // business doesn't, so compare the amount before tax. (If tax ever applies in the real books,
+  // WareHouse's own totals, which are before tax, will differ from Xero's by exactly that.)
+  check("Xero's amount before tax matches ours to the penny", Math.abs(xa.SubTotal - expected) < 0.005, `Xero ${xa.SubTotal}, expected ${expected.toFixed(2)}${xa.TotalTax ? `, tax ${xa.TotalTax}` : ""}`);
   check("Xero's contact is our organisation", xa.Contact?.Name?.startsWith("ZZ-WRITE-TEST Demo Org"), xa.Contact?.Name);
   const again = await syncInvoice(deps, a);
   check("syncing it again is refused (authorised invoices aren't edited)", !again.ok);
@@ -88,7 +91,10 @@ try {
   const r2 = await syncInvoice(deps, b);
   check("sync succeeded", r2.ok, r2.ok ? "" : r2.error);
   const ib = await row(b);
-  check("recorded as paid in Xero", ib.xero_status === "PAID" && ib.paid_pence === 10000 && ib.balance_pence === 0 && !!ib.xero_payment_id, `${ib.xero_status}, paid ${ib.paid_pence}`);
+  const xb = await xero.getInvoice(ib.xero_invoice_id, token);
+  check("the payment is recorded in Xero for exactly the card amount", Math.abs(xb.AmountPaid - 100) < 0.005 && !!ib.xero_payment_id, `Xero paid ${xb.AmountPaid}`);
+  check("and we hold Xero's paid and balance", ib.paid_pence === 10000 && ib.balance_pence === Math.round(xb.AmountDue * 100), `${ib.xero_status}, paid ${ib.paid_pence}, balance ${ib.balance_pence}`);
+  check("and it is PAID when no tax is added", ib.xero_status === (xb.AmountDue === 0 ? "PAID" : "AUTHORISED"), xb.AmountDue ? `Xero shows ${xb.AmountDue} still due: tax on the demo account` : "");
   check("and no error left on the invoice", !ib.xero_sync_error, ib.xero_sync_error ?? "");
 
   console.log("\n3. Voiding");

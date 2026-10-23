@@ -72,19 +72,21 @@ export function createSupabaseStore(url: string, key: string, db: SupabaseClient
     },
 
     async saveSynced(invoiceId, facts, lineXeroIds) {
-      await update(
-        "invoices",
-        invoiceId,
-        {
-          ...(facts.number ? { number: facts.number } : {}),
-          xero_invoice_id: facts.xeroInvoiceId,
-          ...factsColumns(facts),
-          xero_url: facts.url ?? null,
-          xero_sync_status: "Synced",
-          xero_sync_error: null,
-        },
-        "invoice save",
-      );
+      const values = {
+        xero_invoice_id: facts.xeroInvoiceId,
+        ...factsColumns(facts),
+        xero_url: facts.url ?? null,
+        xero_sync_status: "Synced",
+        xero_sync_error: null as string | null,
+      };
+      const first = await db.from("invoices").update({ ...values, ...(facts.number ? { number: facts.number } : {}) }).eq("id", invoiceId);
+      if (first.error) {
+        // Xero has already created the invoice, so its id must be saved whatever else goes wrong:
+        // losing it would make the next attempt create a duplicate. If only the number is the
+        // problem (another invoice here already has it), save everything but the number and say so.
+        if (!/invoices_number_key/.test(first.error.message)) fail("invoice save", first.error);
+        await update("invoices", invoiceId, { ...values, xero_sync_error: `Xero numbered this invoice ${facts.number}, but another invoice here already has that number.` }, "invoice save (without number)");
+      }
       // Approved is stamped by the first successful sync, as the Airtable version did.
       await db.from("invoices").update({ approved_at: new Date().toISOString() }).eq("id", invoiceId).is("approved_at", null);
       const { data: lines } = await db.from("invoice_lines").select("id").eq("invoice_id", invoiceId).order("position");
