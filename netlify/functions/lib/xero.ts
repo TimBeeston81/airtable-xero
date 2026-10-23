@@ -133,3 +133,10 @@ export async function createContact(contactPayload: Record<string, unknown>, tok
   const data = await xeroRequest("POST", "/Contacts", token, { Contacts: [contactPayload] });
   return data.Contacts?.[0];
 }
+
+// The Xero organisation this connection belongs to. A custom connection is tied to
+// exactly one, so its name says whether we are talking to the demo company or the real books.
+export async function getOrganisationName(token: string): Promise<string> {
+  const data = await xeroRequest("GET", "/Organisation", token);
+  return String(data.Organisations?.[0]?.Name ?? "");
+}

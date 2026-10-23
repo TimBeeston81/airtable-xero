@@ -2,6 +2,8 @@ import type { Context, Config } from "@netlify/functions";
 import crypto from "node:crypto";
 import { findRecordByField, updateRecord, buildLogEntry } from "./lib/airtable";
 import { getAccessToken, getInvoice, parseXeroDate } from "./lib/xero";
+import { applyWebhookEvent, checkWebhookPairing } from "./lib/invoice-sync";
+import { realDeps } from "./lib/supabase-deps";
 
 const TABLES = { INVOICES: "Invoices" };
 const SOURCE = "xero-webhook";
@@ -102,9 +104,12 @@ export default async (req: Request, context: Context): Promise<Response> => {
   try {
     if (events.length > 0) {
       const token = await getAccessToken();
+      // DATA_SOURCE=supabase points this at WareHouse's database instead of Airtable.
+      const supabaseDeps = Netlify.env.get("DATA_SOURCE") === "supabase" ? realDeps() : null;
+      if (supabaseDeps) await checkWebhookPairing(supabaseDeps, token);
       await Promise.all(
         events.map((evt) =>
-          processEvent(evt, token).catch((err) => {
+          (supabaseDeps ? applyWebhookEvent(supabaseDeps, evt, token) : processEvent(evt, token)).catch((err) => {
             console.error("xero-webhook event processing error:", evt.resourceId, err);
           })
         )
