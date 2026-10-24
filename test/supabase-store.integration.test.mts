@@ -172,3 +172,22 @@ test("the real task store: reads origin columns and project, logs events, and st
   assert.equal((await notifyNewTask(deps, task.id)).ok, false, "a task that doesn't exist is an error");
   assert.equal(pushes.length, 0);
 });
+
+test("when Xero reports a deposit paid, the quote moves on by itself (the database trigger, end to end)", { skip }, async () => {
+  const quote = must(await db.from("quotes").insert({ organisation_id: made.org, title: "ZZ trigger quote", status: "Approved", payment_status: "Deposit Outstanding", deposit_pence: 91234, is_test: true }).select("id").single());
+  const id = await makeInvoice({ quote_id: quote.id, payment_type: "Deposit" });
+  const xero = newXero();
+  assert.ok((await syncInvoice(deps(xero), id)).ok);
+  assert.equal((await db.from("quotes").select("payment_status").eq("id", quote.id).single()).data.payment_status, "Deposit Outstanding", "synced but unpaid: nothing moves");
+  const xi = xero.invoices.get(`${xero.prefix}xi-1`);
+  xi.AmountPaid = xi.Total; xi.AmountDue = 0; xi.Status = "PAID"; xi.UpdatedDateUTC = "/Date(1800000000000+0000)/";
+  await applyWebhookEvent(deps(xero), { eventCategory: "INVOICE", resourceId: `${xero.prefix}xi-1` }, "tok");
+  const q = (await db.from("quotes").select("payment_status, deposit_paid_on").eq("id", quote.id).single()).data;
+  assert.equal(q.payment_status, "Balance Outstanding");
+  assert.ok(q.deposit_paid_on);
+  const { data: ev } = await db.from("events").select("automation, message").eq("entity_id", quote.id).eq("automation", "Advance Payment Status");
+  assert.equal(ev.length, 1);
+  await db.from("invoices").delete().eq("id", id);
+  await db.from("quotes").delete().eq("id", quote.id);
+  await db.from("events").delete().eq("entity_id", quote.id);
+});
