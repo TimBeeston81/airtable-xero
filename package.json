@@ -1,8 +1,8 @@
 {
-  "name": "airtable-xero-sync",
+  "name": "warehouse-xero",
   "version": "1.0.0",
   "private": true,
-  "description": "Direct Airtable to Xero sync, running as Netlify Functions.",
+  "description": "WareHouse to Xero (invoices, payments, task status), running as Netlify Functions. Deployed to the Netlify project airtable-xero-sync.",
   "engines": {
     "node": ">=18"
   },
