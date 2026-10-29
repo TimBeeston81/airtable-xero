@@ -112,6 +112,13 @@ export async function createPayment(
   return data.Payments?.[0];
 }
 
+// One page (up to 100) of sales invoices, with their lines. Read-only.
+export async function listSalesInvoicesPage(page: number, token: string): Promise<any[]> {
+  const where = encodeURIComponent('Type=="ACCREC"');
+  const data = await xeroRequest("GET", `/Invoices?where=${where}&order=InvoiceNumber&page=${page}`, token);
+  return data.Invoices ?? [];
+}
+
 // The customer-facing "pay online" link. Separate endpoint, not part of the Invoice object itself.
 export async function getOnlineInvoiceUrl(invoiceId: string, token: string): Promise<string | undefined> {
   const data = await xeroRequest("GET", `/Invoices/${invoiceId}/OnlineInvoice`, token);
